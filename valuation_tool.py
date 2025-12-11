@@ -2,12 +2,11 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np 
-# Ensure numpy is in requirements.txt (must be updated if you haven't already!)
 
 # --- Helper Function for CAGR Calculation ---
 def calculate_cagr(start_value, end_value, years):
     """Calculates Compound Annual Growth Rate (CAGR)."""
-    if start_value > 0 and end_value > 0 and years > 0 and years < 100: # Added years check
+    if start_value > 0 and end_value > 0 and years > 0 and years < 100:
         try:
             # Use NumPy for robust calculation: (End/Start)^(1/Years) - 1
             cagr = np.power((end_value / start_value), (1 / years)) - 1
@@ -47,11 +46,9 @@ if ticker_symbol:
             st.stop()
             
         # --- SAFELY FETCH REVENUE DATA ---
-        # Get annual financials (transposed for easier access)
         financials = stock.financials.T.sort_index(ascending=True) 
         revenue_data = financials.get('Total Revenue', pd.Series()).dropna()
         
-        # Determine Current Revenue
         current_revenue = revenue_data.iloc[-1] if not revenue_data.empty else info.get('totalRevenue', 0)
         
         if current_revenue == 0:
@@ -134,8 +131,6 @@ if ticker_symbol:
                     delta=f"{diff:.1f}%", 
                     delta_color="normal")
         
-        # Explain the calculation model used 
-        
         if is_buy:
             st.success(f"✅ **UNDERVALUED** by {abs(diff):.1f}% based on your assumptions.")
         else:
@@ -144,7 +139,5 @@ if ticker_symbol:
         st.caption("Valuation Breakdown")
         df = pd.DataFrame({
             "Metric": ["Future Revenue", "Future EPS", "Future FCF/Share"],
-            f"Value in {years} Yrs": [f"${future_revenue/10**9:.1f}B", f"${future_eps:.2f}", f"${future_fcf_per_share:.2f}"]
-        })
-        st.dataframe(df, hide_index=True, use_container_width=
+            f"Value in {years}
         
