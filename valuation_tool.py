@@ -53,35 +53,47 @@ if ticker_symbol:
             st.stop()
             
         # --- SAFELY FETCH FINANCIAL DATA ---
+        # Fetching all available annual financial data
         financials = stock.financials.T.sort_index(ascending=True) 
         
         # 1. Revenue Data
         revenue_data = financials.get('Total Revenue', pd.Series()).dropna()
         current_revenue = revenue_data.iloc[-1] if not revenue_data.empty else info.get('totalRevenue', 0)
-        if current_revenue == 0:
-            st.warning("Could not fetch current annual revenue.")
         
         # 2. Net Income Data
         net_income_data = financials.get('Net Income', pd.Series()).dropna()
         
         # --- CALCULATE HISTORICAL GROWTH & MARGINS ---
         
-        # Revenue CAGRs
-        cagr_1y = calculate_cagr(revenue_data.iloc[-2], current_revenue, 1) if len(revenue_data) >= 2 else 0.0
-        cagr_5y = calculate_cagr(revenue_data.iloc[-5], current_revenue, 5) if len(revenue_data) >= 5 else 0.0
-        cagr_10y = calculate_cagr(revenue_data.iloc[-10], current_revenue, 10) if len(revenue_data) >= 10 else 0.0
+        # Revenue CAGRs (Dynamic Check for data availability)
+        
+        # 1-Year (TTM)
+        cagr_1y = calculate_cagr(revenue_data.iloc[-2], current_revenue, 1) if len(revenue_data) >= 2 else np.nan
+        
+        # 5-Year CAGR
+        if len(revenue_data) >= 5:
+            start_5y = revenue_data.iloc[-5]
+            cagr_5y = calculate_cagr(start_5y, current_revenue, 5)
+        else:
+            cagr_5y = np.nan
+        
+        # 10-Year CAGR
+        if len(revenue_data) >= 10:
+            start_10y = revenue_data.iloc[-10]
+            cagr_10y = calculate_cagr(start_10y, current_revenue, 10)
+        else:
+            cagr_10y = np.nan
         
         # Profit Margins
         if len(revenue_data) > 0 and len(net_income_data) > 0:
-            # Create a series of historical profit margins (Net Income / Revenue)
             historical_margins = (net_income_data / revenue_data).dropna()
         else:
             historical_margins = pd.Series([0.0])
 
-        # Historical Average Margins
-        avg_margin_1y = historical_margins.iloc[-1] if not historical_margins.empty else 0.0
-        avg_margin_5y = calculate_avg_margin(historical_margins, 5)
-        avg_margin_10y = calculate_avg_margin(historical_margins, 10)
+        # Historical Average Margins (Use NaN if not enough data)
+        avg_margin_1y = historical_margins.iloc[-1] if not historical_margins.empty else np.nan
+        avg_margin_5y = calculate_avg_margin(historical_margins, 5) if len(historical_margins) >= 5 else np.nan
+        avg_margin_10y = calculate_avg_margin(historical_margins, 10) if len(historical_margins) >= 10 else np.nan
 
         # --- Display Historical Data ---
         st.markdown("---")
@@ -101,17 +113,25 @@ if ticker_symbol:
         
         with col_r:
             st.caption("Revenue Growth (CAGR)")
+            # Format function to show 0.00% or "N/A"
+            def format_cagr(value):
+                return f"{value * 100:.2f}%" if not np.isnan(value) else "N/A"
+
             historical_data_r = {
                 "Period": ["Last Year (TTM)", "Last 5 Years", "Last 10 Years"],
-                "Growth Rate": [f"{cagr_1y * 100:.2f}%", f"{cagr_5y * 100:.2f}%", f"{cagr_10y * 100:.2f}%"]
+                "Growth Rate": [format_cagr(cagr_1y), format_cagr(cagr_5y), format_cagr(cagr_10y)]
             }
             st.dataframe(pd.DataFrame(historical_data_r), hide_index=True, use_container_width=True)
             
         with col_m:
             st.caption("Net Profit Margin (Average)")
+            # Format function to show 0.00% or "N/A"
+            def format_margin(value):
+                return f"{value * 100:.2f}%" if not np.isnan(value) else "N/A"
+
             historical_data_m = {
                 "Period": ["Last Year (TTM)", "Last 5 Years", "Last 10 Years"],
-                "Margin": [f"{avg_margin_1y * 100:.2f}%", f"{avg_margin_5y * 100:.2f}%", f"{avg_margin_10y * 100:.2f}%"]
+                "Margin": [format_margin(avg_margin_1y), format_margin(avg_margin_5y), format_margin(avg_margin_10y)]
             }
             st.dataframe(pd.DataFrame(historical_data_m), hide_index=True, use_container_width=True)
 
@@ -119,11 +139,17 @@ if ticker_symbol:
         st.subheader("3. Future Growth and Margins Assumptions")
         
         # Margin and Projection Inputs
-        revenue_growth = st.number_input("Projected Annual Revenue Growth (%)", value=6.0, step=0.5) / 100
-        target_profit_margin = st.number_input("Target Net Profit Margin (%)", min_value=0.0, value=15.0, step=0.5) / 100
+        # Default value for revenue_growth is set based on the calculated 5Y CAGR if available, otherwise 6.0
+        default_growth = cagr_5y * 100 if not np.isnan(cagr_5y) else 6.0
+        # Default margin based on 5Y avg if available
+        default_margin = avg_margin_5y * 100 if not np.isnan(avg_margin_5y) else 15.0
+        
+        revenue_growth = st.number_input("Projected Annual Revenue Growth (%)", value=float(f"{default_growth:.2f}"), step=0.5) / 100
+        target_profit_margin = st.number_input("Target Net Profit Margin (%)", min_value=0.0, value=float(f"{default_margin:.2f}"), step=0.5) / 100
         target_fcf_margin = st.number_input("Target FCF Margin (%)", min_value=0.0, value=18.0, step=0.5) / 100
 
         # --- VALUATION CALCULATIONS ---
+        # Calculation logic remains correct: 
         
         # 1. Project Future Revenue
         future_revenue = current_revenue_for_calc * np.power((1 + revenue_growth), years)
@@ -160,7 +186,6 @@ if ticker_symbol:
                     delta=f"{diff:.1f}%", 
                     delta_color="normal")
         
-        # FIX: The entire f-string below is now on a single, continuous line to prevent newline errors.
         if is_buy:
             st.success(f"✅ **UNDERVALUED** by {abs(diff):.1f}% based on your assumptions.")
         else:
