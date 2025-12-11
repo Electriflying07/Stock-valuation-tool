@@ -131,6 +131,7 @@ if ticker_symbol:
                     delta=f"{diff:.1f}%", 
                     delta_color="normal")
         
+        # The syntax error was here (missing closing quote):
         if is_buy:
             st.success(f"✅ **UNDERVALUED** by {abs(diff):.1f}% based on your assumptions.")
         else:
@@ -139,5 +140,19 @@ if ticker_symbol:
         st.caption("Valuation Breakdown")
         df = pd.DataFrame({
             "Metric": ["Future Revenue", "Future EPS", "Future FCF/Share"],
-            f"Value in {years}
+            # CORRECTED: Closing quote added to the f-string key:
+            f"Value in {years} Yrs": [f"${future_revenue/10**9:.1f}B", f"${future_eps:.2f}", f"${future_fcf_per_share:.2f}"] 
+        })
+        st.dataframe(df, hide_index=True, use_container_width=True)
+
+        st.caption("Intrinsic Value Comparison")
+        df2 = pd.DataFrame({
+            "Method": ["Based on Earnings (P/E)", "Based on Cash Flow (P/FCF)"],
+            "Fair Value": [f"${intrinsic_pe:.2f}", f"${intrinsic_fcf:.2f}"]
+        })
+        st.dataframe(df2, hide_index=True, use_container_width=True)
+
+
+    except Exception as e:
+        st.error(f"A critical error occurred during data processing. Please ensure your Ticker is correct and refresh the page. Error details: {e}")
         
