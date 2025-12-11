@@ -1,22 +1,24 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np # Import numpy for log/power functions
 
 # --- Helper Function for CAGR Calculation ---
 def calculate_cagr(start_value, end_value, years):
     """Calculates Compound Annual Growth Rate (CAGR)."""
     if start_value > 0 and end_value > 0 and years > 0:
         try:
-            cagr = ((end_value / start_value) ** (1 / years) - 1)
+            # np.power is more robust than Python's native ** for fractional exponents
+            cagr = np.power((end_value / start_value), (1 / years)) - 1
             return cagr
-        except OverflowError:
+        except Exception:
             return 0.0
     return 0.0
 
 # --- Mobile Config ---
-st.set_page_config(page_title="Stock Valuator (Historical & Margin)", layout="centered")
+st.set_page_config(page_title="Stock Valuator (Final Margin Model)", layout="centered")
 
-st.header("📈 Stock Valuation Tool (Advanced)")
+st.header("📈 Stock Valuation Tool (Final Margin Model)")
 
 # --- Inputs (Collapsible for Mobile) ---
 with st.expander("1. Stock & Assumptions (Tap to Open)", expanded=True):
@@ -45,35 +47,29 @@ if ticker_symbol:
         # Fetch historical annual financials
         financials = stock.financials.T.sort_index(ascending=True)
         
-        # --- CALCULATE HISTORICAL GROWTH (NEW) ---
-        revenue_data = financials['Total Revenue'].dropna()
+        # --- CALCULATE HISTORICAL GROWTH ---
+        revenue_data = financials.get('Total Revenue', pd.Series()).dropna()
         
-        # Check for enough data points
-        if len(revenue_data) < 2:
-            st.warning("Not enough historical revenue data to calculate growth rates.")
-            current_revenue = info.get('totalRevenue', 0)
-            ttm_growth = 0.0
-        else:
-            current_revenue = revenue_data.iloc[-1]
+        current_revenue = revenue_data.iloc[-1] if not revenue_data.empty else info.get('totalRevenue', 0)
+        
+        cagr_5y = 0.0
+        cagr_10y = 0.0
+        
+        if len(revenue_data) >= 5:
+            start_5y = revenue_data.iloc[-5]
+            cagr_5y = calculate_cagr(start_5y, current_revenue, 5)
+        
+        if len(revenue_data) >= 10:
+            start_10y = revenue_data.iloc[-10]
+            cagr_10y = calculate_cagr(start_10y, current_revenue, 10)
             
-            # TTM (Last Year) Growth
-            ttm_growth = calculate_cagr(revenue_data.iloc[-2], current_revenue, 1)
-            
-            # 5-Year CAGR
-            start_5y = revenue_data.iloc[max(0, len(revenue_data) - 5)]
-            years_5y = min(4, len(revenue_data) - 1)
-            cagr_5y = calculate_cagr(start_5y, current_revenue, years_5y)
-            
-            # 10-Year CAGR
-            start_10y = revenue_data.iloc[max(0, len(revenue_data) - 10)]
-            years_10y = min(9, len(revenue_data) - 1)
-            cagr_10y = calculate_cagr(start_10y, current_revenue, years_10y)
+        ttm_growth = calculate_cagr(revenue_data.iloc[-2], current_revenue, 1) if len(revenue_data) >= 2 else 0.0
 
         # --- Display Historical Growth ---
         st.markdown("---")
         st.subheader("2. Historical Revenue Context")
         
-        # Display Current Revenue as a standard input number for easy modification
+        # Display Current Revenue as an input number for easy modification
         current_revenue_B = current_revenue / 1e9
         current_revenue_B_input = st.number_input(
             "Current Annual Revenue (in Billions) [Auto-Filled]",
@@ -92,18 +88,19 @@ if ticker_symbol:
         st.markdown("---")
         st.subheader("3. Future Growth and Margins")
         
-        # Move Projection Inputs down here, next to historical data
+        # Margin and Projection Inputs
         revenue_growth = st.number_input("Projected Annual Revenue Growth (%)", value=6.0, step=0.5) / 100
         target_profit_margin = st.number_input("Target Net Profit Margin (%)", min_value=0.0, value=15.0, step=0.5) / 100
         target_fcf_margin = st.number_input("Target FCF Margin (%)", min_value=0.0, value=18.0, step=0.5) / 100
 
-        # --- VALUATION CALCULATIONS ---
+        # --- VALUATION CALCULATIONS (CORRECTED) ---
         
         # 1. Project Future Revenue
-        future_revenue = current_revenue_for_calc * ((1 + revenue_growth) ** years)
+        future_revenue = current_revenue_for_calc * np.power((1 + revenue_growth), years)
         
-        # 2. Project Future Earnings and FCF
-        future_net_income = future_revenue * target_profit_margin
+        # 2. Project Future Earnings (Net Income) and FCF
+        # FIX: Ensure Future Net Income is calculated using the Target Profit Margin
+        future_net_income = future_revenue * target_profit_margin 
         future_fcf_total = future_revenue * target_fcf_margin
         
         # 3. Calculate Future Per Share Metrics
@@ -115,8 +112,8 @@ if ticker_symbol:
         future_price_fcf = future_fcf_per_share * target_pfcf
         
         # 5. Intrinsic Value (Discounted)
-        intrinsic_pe = future_price_pe / ((1 + required_return) ** years)
-        intrinsic_fcf = future_price_fcf / ((1 + required_return) ** years)
+        intrinsic_pe = future_price_pe / np.power((1 + required_return), years)
+        intrinsic_fcf = future_price_fcf / np.power((1 + required_return), years)
         
         avg_value = (intrinsic_pe + intrinsic_fcf) / 2
         
@@ -133,7 +130,9 @@ if ticker_symbol:
         col2.metric("Fair Value", f"${avg_value:.2f}", 
                     delta=f"{diff:.1f}%", 
                     delta_color="normal")
-
+        
+        # Provide a visualization of the valuation framework 
+        
         if is_buy:
             st.success(f"✅ **UNDERVALUED** by {abs(diff):.1f}% based on your assumptions.")
         else:
@@ -149,11 +148,4 @@ if ticker_symbol:
         st.caption("Intrinsic Value Comparison")
         df2 = pd.DataFrame({
             "Method": ["Based on Earnings (P/E)", "Based on Cash Flow (P/FCF)"],
-            "Fair Value": [f"${intrinsic_pe:.2f}", f"${intrinsic_fcf:.2f}"]
-        })
-        st.dataframe(df2, hide_index=True, use_container_width=True)
-
-
-    except Exception as e:
-        st.error(f"Error fetching or calculating data. Check the ticker or input values. Details: {e}")
-        
+            "Fair Value": [f"${intrinsic_pe:.2f}", f"${intrinsic_fcf:.
