@@ -2,56 +2,111 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-# --- Mobile Config ---
-st.set_page_config(page_title="Stock Valuator (Margin Model)", layout="centered")
+# --- Helper Function for CAGR Calculation ---
+def calculate_cagr(start_value, end_value, years):
+    """Calculates Compound Annual Growth Rate (CAGR)."""
+    if start_value > 0 and end_value > 0 and years > 0:
+        try:
+            cagr = ((end_value / start_value) ** (1 / years) - 1)
+            return cagr
+        except OverflowError:
+            return 0.0
+    return 0.0
 
-st.header("📱 Stock Valuation Tool (Margin Model)")
+# --- Mobile Config ---
+st.set_page_config(page_title="Stock Valuator (Historical & Margin)", layout="centered")
+
+st.header("📈 Stock Valuation Tool (Advanced)")
 
 # --- Inputs (Collapsible for Mobile) ---
 with st.expander("1. Stock & Assumptions (Tap to Open)", expanded=True):
     ticker_symbol = st.text_input("Ticker Symbol", value="PYPL").upper()
-    
-    st.markdown("---")
-    st.write("**Financial Inputs**")
-    
-    # NEW INPUT: Base Revenue and Margin Targets
-    current_revenue = st.number_input("Current Annual Revenue (in Billions)", min_value=0.1, value=29.7, step=0.1)
-    
-    st.write("**Growth & Margins**")
-    revenue_growth = st.number_input("Projected Annual Revenue Growth (%)", value=6.0, step=0.5) / 100
-    target_profit_margin = st.number_input("Target Net Profit Margin (%)", min_value=0.0, value=15.0, step=0.5) / 100
-    target_fcf_margin = st.number_input("Target FCF Margin (%)", min_value=0.0, value=18.0, step=0.5) / 100
     
     st.write("**Discount & Multiples**")
     required_return = st.number_input("Required Return (%)", value=12.0, step=0.5) / 100
     years = st.slider("Years to Project", 1, 10, 10)
     target_pe = st.number_input("Target P/E Multiplier (Year End)", value=15.0)
     target_pfcf = st.number_input("Target P/FCF Multiplier (Year End)", value=18.0)
-    
+
 # --- Logic & Display ---
 if ticker_symbol:
     try:
         stock = yf.Ticker(ticker_symbol)
         info = stock.info
         
-        # Live Data
+        # Check essential live data
         current_price = info.get('currentPrice', 0.0)
         shares_out = info.get('sharesOutstanding', 1)
         
         if current_price == 0 or shares_out == 1:
             st.warning("Could not fetch essential live data. Check Ticker.")
             st.stop()
+            
+        # Fetch historical annual financials
+        financials = stock.financials.T.sort_index(ascending=True)
+        
+        # --- CALCULATE HISTORICAL GROWTH (NEW) ---
+        revenue_data = financials['Total Revenue'].dropna()
+        
+        # Check for enough data points
+        if len(revenue_data) < 2:
+            st.warning("Not enough historical revenue data to calculate growth rates.")
+            current_revenue = info.get('totalRevenue', 0)
+            ttm_growth = 0.0
+        else:
+            current_revenue = revenue_data.iloc[-1]
+            
+            # TTM (Last Year) Growth
+            ttm_growth = calculate_cagr(revenue_data.iloc[-2], current_revenue, 1)
+            
+            # 5-Year CAGR
+            start_5y = revenue_data.iloc[max(0, len(revenue_data) - 5)]
+            years_5y = min(4, len(revenue_data) - 1)
+            cagr_5y = calculate_cagr(start_5y, current_revenue, years_5y)
+            
+            # 10-Year CAGR
+            start_10y = revenue_data.iloc[max(0, len(revenue_data) - 10)]
+            years_10y = min(9, len(revenue_data) - 1)
+            cagr_10y = calculate_cagr(start_10y, current_revenue, years_10y)
 
-        # --- Calculations ---
+        # --- Display Historical Growth ---
+        st.markdown("---")
+        st.subheader("2. Historical Revenue Context")
+        
+        # Display Current Revenue as a standard input number for easy modification
+        current_revenue_B = current_revenue / 1e9
+        current_revenue_B_input = st.number_input(
+            "Current Annual Revenue (in Billions) [Auto-Filled]",
+            min_value=0.1, 
+            value=float(f"{current_revenue_B:.2f}"), 
+            step=0.1
+        )
+        current_revenue_for_calc = current_revenue_B_input * 1e9
+        
+        historical_data = {
+            "Period": ["Last Year (TTM)", "Last 5 Years CAGR", "Last 10 Years CAGR"],
+            "Growth Rate": [f"{ttm_growth * 100:.2f}%", f"{cagr_5y * 100:.2f}%", f"{cagr_10y * 100:.2f}%"]
+        }
+        st.dataframe(pd.DataFrame(historical_data), hide_index=True, use_container_width=True)
+        
+        st.markdown("---")
+        st.subheader("3. Future Growth and Margins")
+        
+        # Move Projection Inputs down here, next to historical data
+        revenue_growth = st.number_input("Projected Annual Revenue Growth (%)", value=6.0, step=0.5) / 100
+        target_profit_margin = st.number_input("Target Net Profit Margin (%)", min_value=0.0, value=15.0, step=0.5) / 100
+        target_fcf_margin = st.number_input("Target FCF Margin (%)", min_value=0.0, value=18.0, step=0.5) / 100
+
+        # --- VALUATION CALCULATIONS ---
         
         # 1. Project Future Revenue
-        future_revenue = current_revenue * (10**9) * ((1 + revenue_growth) ** years)
+        future_revenue = current_revenue_for_calc * ((1 + revenue_growth) ** years)
         
-        # 2. Project Future Earnings (Net Income) and FCF
+        # 2. Project Future Earnings and FCF
         future_net_income = future_revenue * target_profit_margin
         future_fcf_total = future_revenue * target_fcf_margin
         
-        # 3. Calculate Future EPS and FCF per Share
+        # 3. Calculate Future Per Share Metrics
         future_eps = future_net_income / shares_out
         future_fcf_per_share = future_fcf_total / shares_out
         
@@ -69,9 +124,9 @@ if ticker_symbol:
         diff = (avg_value - current_price) / current_price * 100
         is_buy = avg_value > current_price
 
-        # --- Mobile Dashboard ---
+        # --- RESULTS DISPLAY ---
         st.markdown("---")
-        st.subheader(f"Results: {ticker_symbol}")
+        st.subheader(f"4. Valuation Results: {ticker_symbol}")
         
         col1, col2 = st.columns(2)
         col1.metric("Live Price", f"${current_price:.2f}")
