@@ -8,17 +8,26 @@ def calculate_cagr(start_value, end_value, years):
     """Calculates Compound Annual Growth Rate (CAGR)."""
     if start_value > 0 and end_value > 0 and years > 0 and years < 100:
         try:
-            # Use NumPy for robust calculation: (End/Start)^(1/Years) - 1
             cagr = np.power((end_value / start_value), (1 / years)) - 1
             return cagr
         except Exception:
             return 0.0
     return 0.0
 
-# --- Mobile Config ---
-st.set_page_config(page_title="Stock Valuator (Final Stabilized)", layout="centered")
+# --- Helper Function for Average Margin Calculation ---
+def calculate_avg_margin(data, years):
+    """Calculates the average profit margin over the specified number of years."""
+    if len(data) >= years:
+        # Get the last 'years' worth of margins
+        recent_margins = data.iloc[-years:]
+        # Calculate the simple average of those margins
+        return recent_margins.mean()
+    return 0.0
 
-st.header("📈 Stock Valuation Tool (Final Stabilized)")
+# --- Mobile Config ---
+st.set_page_config(page_title="Stock Valuator (Historical Margins)", layout="centered")
+
+st.header("📈 Stock Valuation Tool (Historical Margins)")
 
 # --- Inputs (Collapsible for Mobile) ---
 with st.expander("1. Stock & Assumptions (Tap to Open)", expanded=True):
@@ -33,7 +42,6 @@ with st.expander("1. Stock & Assumptions (Tap to Open)", expanded=True):
 # --- Logic & Display ---
 if ticker_symbol:
     
-    # --- Try/Except Block for Data Fetching ---
     try:
         stock = yf.Ticker(ticker_symbol)
         info = stock.info
@@ -45,114 +53,24 @@ if ticker_symbol:
             st.warning("Could not fetch essential live data (Price or Shares Outstanding). Check Ticker.")
             st.stop()
             
-        # --- SAFELY FETCH REVENUE DATA ---
+        # --- SAFELY FETCH FINANCIAL DATA ---
         financials = stock.financials.T.sort_index(ascending=True) 
+        
+        # 1. Revenue Data
         revenue_data = financials.get('Total Revenue', pd.Series()).dropna()
-        
         current_revenue = revenue_data.iloc[-1] if not revenue_data.empty else info.get('totalRevenue', 0)
-        
         if current_revenue == 0:
-            st.warning("Could not fetch current annual revenue. Please manually input revenue.")
+            st.warning("Could not fetch current annual revenue.")
         
-        # --- CALCULATE HISTORICAL GROWTH (Robustly) ---
-        cagr_1y = 0.0
-        cagr_5y = 0.0
-        cagr_10y = 0.0
+        # 2. Net Income Data
+        net_income_data = financials.get('Net Income', pd.Series()).dropna()
         
-        if len(revenue_data) >= 2:
-            cagr_1y = calculate_cagr(revenue_data.iloc[-2], current_revenue, 1)
-        if len(revenue_data) >= 5:
-            cagr_5y = calculate_cagr(revenue_data.iloc[-5], current_revenue, 5)
-        if len(revenue_data) >= 10:
-            cagr_10y = calculate_cagr(revenue_data.iloc[-10], current_revenue, 10)
-
-        # --- Display Historical Growth ---
-        st.markdown("---")
-        st.subheader("2. Historical Revenue Context")
+        # --- CALCULATE HISTORICAL GROWTH & MARGINS ---
         
-        # Display Current Revenue and allow user to override (in Billions)
-        current_revenue_B = current_revenue / 1e9
-        current_revenue_B_input = st.number_input(
-            "Current Annual Revenue (in Billions)",
-            min_value=0.1, 
-            value=float(f"{current_revenue_B:.2f}"), 
-            step=0.1
-        )
-        current_revenue_for_calc = current_revenue_B_input * 1e9
+        # Revenue CAGRs
+        cagr_1y = calculate_cagr(revenue_data.iloc[-2], current_revenue, 1) if len(revenue_data) >= 2 else 0.0
+        cagr_5y = calculate_cagr(revenue_data.iloc[-5], current_revenue, 5) if len(revenue_data) >= 5 else 0.0
+        cagr_10y = calculate_cagr(revenue_data.iloc[-10], current_revenue, 10) if len(revenue_data) >= 10 else 0.0
         
-        historical_data = {
-            "Period": ["Last Year (TTM)", "Last 5 Years CAGR", "Last 10 Years CAGR"],
-            "Growth Rate": [f"{cagr_1y * 100:.2f}%", f"{cagr_5y * 100:.2f}%", f"{cagr_10y * 100:.2f}%"]
-        }
-        st.dataframe(pd.DataFrame(historical_data), hide_index=True, use_container_width=True)
-        
-        st.markdown("---")
-        st.subheader("3. Future Growth and Margins")
-        
-        # Margin and Projection Inputs
-        revenue_growth = st.number_input("Projected Annual Revenue Growth (%)", value=6.0, step=0.5) / 100
-        target_profit_margin = st.number_input("Target Net Profit Margin (%)", min_value=0.0, value=15.0, step=0.5) / 100
-        target_fcf_margin = st.number_input("Target FCF Margin (%)", min_value=0.0, value=18.0, step=0.5) / 100
-
-        # --- VALUATION CALCULATIONS ---
-        
-        # 1. Project Future Revenue
-        future_revenue = current_revenue_for_calc * np.power((1 + revenue_growth), years)
-        
-        # 2. Project Future Earnings (Net Income) and FCF
-        future_net_income = future_revenue * target_profit_margin 
-        future_fcf_total = future_revenue * target_fcf_margin
-        
-        # 3. Calculate Future Per Share Metrics
-        future_eps = future_net_income / shares_out
-        future_fcf_per_share = future_fcf_total / shares_out
-        
-        # 4. Future Price
-        future_price_pe = future_eps * target_pe
-        future_price_fcf = future_fcf_per_share * target_pfcf
-        
-        # 5. Intrinsic Value (Discounted)
-        intrinsic_pe = future_price_pe / np.power((1 + required_return), years)
-        intrinsic_fcf = future_price_fcf / np.power((1 + required_return), years)
-        
-        avg_value = (intrinsic_pe + intrinsic_fcf) / 2
-        
-        # Status
-        diff = (avg_value - current_price) / current_price * 100
-        is_buy = avg_value > current_price
-
-        # --- RESULTS DISPLAY ---
-        st.markdown("---")
-        st.subheader(f"4. Valuation Results: {ticker_symbol}")
-        
-        col1, col2 = st.columns(2)
-        col1.metric("Live Price", f"${current_price:.2f}")
-        col2.metric("Fair Value", f"${avg_value:.2f}", 
-                    delta=f"{diff:.1f}%", 
-                    delta_color="normal")
-        
-        # The syntax error was here (missing closing quote):
-        if is_buy:
-            st.success(f"✅ **UNDERVALUED** by {abs(diff):.1f}% based on your assumptions.")
-        else:
-            st.error(f"❌ **OVERVALUED** by {abs(diff):.1f}% based on your assumptions.")
-
-        st.caption("Valuation Breakdown")
-        df = pd.DataFrame({
-            "Metric": ["Future Revenue", "Future EPS", "Future FCF/Share"],
-            # CORRECTED: Closing quote added to the f-string key:
-            f"Value in {years} Yrs": [f"${future_revenue/10**9:.1f}B", f"${future_eps:.2f}", f"${future_fcf_per_share:.2f}"] 
-        })
-        st.dataframe(df, hide_index=True, use_container_width=True)
-
-        st.caption("Intrinsic Value Comparison")
-        df2 = pd.DataFrame({
-            "Method": ["Based on Earnings (P/E)", "Based on Cash Flow (P/FCF)"],
-            "Fair Value": [f"${intrinsic_pe:.2f}", f"${intrinsic_fcf:.2f}"]
-        })
-        st.dataframe(df2, hide_index=True, use_container_width=True)
-
-
-    except Exception as e:
-        st.error(f"A critical error occurred during data processing. Please ensure your Ticker is correct and refresh the page. Error details: {e}")
+        # Profit Margins
         
